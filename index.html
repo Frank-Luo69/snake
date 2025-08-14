@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>经典贪吃蛇 - 轻快版</title>
+<style>
+  :root{
+    --bg:#0e0f12; --panel:#151820; --accent:#4ade80; --accent2:#60a5fa; --warn:#fbbf24; --danger:#ef4444;
+    --grid:#1f2430; --snake:#34d399; --snake-head:#22c55e; --food:#f43f5e; --gold:#facc15;
+  }
+  *{box-sizing:border-box} html,body{height:100%; margin:0; background:linear-gradient(180deg,#0b0c10,#111318);}
+  body{color:#cbd5e1; font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC","Helvetica Neue", Arial}
+  .wrap{max-width:940px; margin:20px auto; padding:16px}
+  .bar{display:flex; gap:12px; flex-wrap:wrap; align-items:center; background:var(--panel); padding:10px 12px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.25)}
+  .bar h1{font-size:18px; margin:0; color:#e5e7eb}
+  .bar .group{display:flex; gap:8px; align-items:center}
+  select,button{background:#0f1220; color:#e5e7eb; border:1px solid #2a2f3a; border-radius:10px; padding:8px 10px}
+  button:hover{border-color:#495367; cursor:pointer}
+  button.primary{background:linear-gradient(90deg,var(--accent2),#8b5cf6); border:none}
+  .stats{margin-left:auto; display:flex; gap:16px; align-items:center}
+  .stats .pill{padding:6px 10px; border-radius:999px; background:#0f1220; border:1px solid #2a2f3a; color:#9ca3af}
+  .board{margin-top:14px; background:var(--panel); border-radius:16px; padding:12px; display:grid; grid-template-columns:1fr; gap:12px}
+  canvas{width:100%; height:auto; display:block; background:#0c0e14; border-radius:12px; box-shadow:0 16px 40px rgba(0,0,0,.35)}
+  .hint{opacity:.85; font-size:13px}
+  .overlay{
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    color:#e5e7eb; background:rgba(0,0,0,.25); pointer-events:none; font-weight:700; letter-spacing:.08em
+  }
+  .overlay.show{display:flex}
+  .mobile-keys{display:none; grid-template-columns:repeat(3,1fr); gap:10px; user-select:none}
+  .key{background:#0f1220; border:1px solid #2a2f3a; border-radius:12px; padding:14px 0; text-align:center; font-weight:600}
+  .key:active{transform:scale(.98); border-color:#56607a}
+  @media (max-width:720px){ .mobile-keys{display:grid} .stats{order:3; width:100%; justify-content:space-between} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="bar">
+      <h1>经典贪吃蛇</h1>
+      <div class="group">
+        <label>模式</label>
+        <select id="mode">
+          <option value="classic">经典（撞墙死亡）</option>
+          <option value="wrap">穿墙（从另一侧出来）</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>难度</label>
+        <select id="speed">
+          <option value="slow">慢</option>
+          <option value="normal" selected>中</option>
+          <option value="fast">快</option>
+        </select>
+      </div>
+      <button class="primary" id="btnStart">开始 / 重开</button>
+      <button id="btnPause" title="Space / P">暂停</button>
+      <div class="stats">
+        <div class="pill">分数 <b id="score">0</b></div>
+        <div class="pill">最高 <b id="best">0</b></div>
+      </div>
+    </div>
+
+    <div class="board">
+      <div style="position:relative">
+        <canvas id="cv" width="576" height="576" aria-label="贪吃蛇画布"></canvas>
+        <div id="overlay" class="overlay">暂停</div>
+      </div>
+
+      <div class="mobile-keys" id="keys">
+        <div class="key" data-k="ArrowUp">↑</div>
+        <div class="key"></div>
+        <div class="key" data-k="ArrowRight">→</div>
+        <div class="key" data-k="ArrowLeft">←</div>
+        <div class="key"></div>
+        <div class="key" data-k="ArrowDown">↓</div>
+      </div>
+
+      <div class="hint">
+        键盘：WASD / 方向键；暂停：Space 或 P。<br/>
+        吃到🍎+1分，偶尔出现的<span style="color:var(--gold)">金苹果</span>+5分且会加速（8秒消失）。
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ====== 基本参数 ======
+  const COLS = 24, ROWS = 24, CELL = 24; // 逻辑网格
+  const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // 提升清晰度到 2x
+  const KEY_MAP = { ArrowUp:[0,-1], KeyW:[0,-1], ArrowDown:[0,1], KeyS:[0,1], ArrowLeft:[-1,0], KeyA:[-1,0], ArrowRight:[1,0], KeyD:[1,0] };
+  const BASE_SPEED = { slow: 170, normal: 130, fast: 95 }; // 毫秒/步
+  const MIN_TICK = 70; // 最快限制
+  const SPEED_STEP = 2; // 每次吃苹果减少的帧间隔（更快）
+  const GOLD_CHANCE = 0.1; // 出现金苹果概率
+  const GOLD_LIFETIME = 8000; // 毫秒
+  const HS_KEY = "snakeHighScoreV1";
+
+  // ====== 取 DOM / 2x 画布 ======
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  const scoreEl = document.getElementById('score'), bestEl = document.getElementById('best');
+  const modeSel = document.getElementById('mode'), speedSel = document.getElementById('speed');
+  const btnStart = document.getElementById('btnStart'), btnPause = document.getElementById('btnPause');
+  const overlay = document.getElementById('overlay');
+  const keysEl = document.getElementById('keys');
+
+  function setupCanvas() {
+    const logicalW = COLS * CELL, logicalH = ROWS * CELL;
+    cv.width = logicalW * DPR; cv.height = logicalH * DPR;
+    cv.style.width = logicalW + "px"; cv.style.height = logicalH + "px";
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  setupCanvas();
+  window.addEventListener('resize', setupCanvas, {passive:true});
+
+  // ====== 声音（WebAudio 简单哔声）======
+  const audio = new (window.AudioContext || window.webkitAudioContext || function(){})();
+  function beep(freq=440, dur=0.06, type='square', vol=0.03){
+    if(!audio.createOscillator) return;
+    const t = audio.currentTime;
+    const o = audio.createOscillator(); const g = audio.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(audio.destination);
+    o.start(t); o.stop(t + dur);
+  }
+
+  // ====== 游戏状态 ======
+  let snake, dir, pendingDir, food, gold, score, best, alive, paused, wrapMode, tickMs, lastTick;
+
+  function reset() {
+    const start = {x: Math.floor(COLS/2), y: Math.floor(ROWS/2)};
+    snake = [start, {x:start.x-1,y:start.y}, {x:start.x-2,y:start.y}];
+    dir = {x:1, y:0};
+    pendingDir = null;
+    score = 0;
+    setScore(0);
+    gold = null;
+    alive = true;
+    paused = false;
+    wrapMode = modeSel.value === 'wrap';
+    tickMs = BASE_SPEED[speedSel.value] || BASE_SPEED.normal;
+    lastTick = 0;
+    spawnFood();
+    overlay.classList.remove('show');
+  }
+
+  function setScore(v){
+    score = v; scoreEl.textContent = score;
+    best = Math.max(score, +localStorage.getItem(HS_KEY)||0);
+    bestEl.textContent = best;
+  }
+
+  function saveBest(){ localStorage.setItem(HS_KEY, best); }
+  (function initBest(){ bestEl.textContent = localStorage.getItem(HS_KEY)||0; })();
+
+  // ====== 工具函数 ======
+  function equal(a,b){ return a.x===b.x && a.y===b.y; }
+  function inSnake(cell){ return snake.some(s => s.x===cell.x && s.y===cell.y); }
+  function randCell(){
+    let c;
+    do{
+      c = { x: (Math.random()*COLS)|0, y: (Math.random()*ROWS)|0 };
+    }while(inSnake(c) || (food && equal(c,food)) || (gold && equal(c,gold.pos)));
+    return c;
+  }
+
+  function spawnFood(){ food = randCell(); }
+
+  function maybeSpawnGold(){
+    if(gold) return;
+    if(Math.random() < GOLD_CHANCE){
+      const pos = randCell(); const born = performance.now();
+      gold = { pos, born };
+      setTimeout(() => { if(gold && performance.now()-gold.born >= GOLD_LIFETIME){ gold=null; } }, GOLD_LIFETIME+50);
+    }
+  }
+
+  // ====== 控制输入 ======
+  window.addEventListener('keydown', (e)=>{
+    if(e.code==='Space' || e.code==='KeyP'){ togglePause(); e.preventDefault(); return; }
+    const v = KEY_MAP[e.code];
+    if(!v) return;
+    const nd = {x:v[0], y:v[1]};
+    // 禁止直接反向
+    if((nd.x === -dir.x && nd.y === 0) || (nd.y === -dir.y && nd.x === 0)) return;
+    pendingDir = nd;
+    e.preventDefault();
+  });
+
+  // 移动端按钮
+  keysEl.addEventListener('click', (e)=>{
+    const k = e.target.getAttribute('data-k');
+    if(!k) return;
+    const fake = {code:k};
+    window.dispatchEvent(new KeyboardEvent('keydown', fake));
+  });
+
+  // 滑动手势
+  let touchStart = null;
+  cv.addEventListener('touchstart', e => { touchStart = e.touches[0]; }, {passive:true});
+  cv.addEventListener('touchmove', e => {
+    if(!touchStart) return;
+    const dx = e.touches[0].clientX - touchStart.clientX;
+    const dy = e.touches[0].clientY - touchStart.clientY;
+    if(Math.abs(dx)+Math.abs(dy) < 24) return;
+    const isH = Math.abs(dx) > Math.abs(dy);
+    const code = isH ? (dx>0?'ArrowRight':'ArrowLeft') : (dy>0?'ArrowDown':'ArrowUp');
+    window.dispatchEvent(new KeyboardEvent('keydown', {code}));
+    touchStart = null;
+    if(navigator.vibrate) navigator.vibrate(8);
+  }, {passive:true});
+
+  // ====== 暂停/继续 ======
+  function togglePause(){
+    if(!alive) return;
+    paused = !paused;
+    overlay.classList.toggle('show', paused);
+  }
+
+  // ====== 主循环 ======
+  function step(ts){
+    requestAnimationFrame(step);
+    if(!alive || paused) return;
+    if(!lastTick) lastTick = ts;
+    const elapsed = ts - lastTick;
+    if(elapsed < tickMs) return;
+    lastTick = ts;
+
+    if(pendingDir){ dir = pendingDir; pendingDir = null; }
+
+    // 下一个头
+    let nx = snake[0].x + dir.x, ny = snake[0].y + dir.y;
+    if(wrapMode){
+      nx = (nx + COLS) % COLS;
+      ny = (ny + ROWS) % ROWS;
+    }else{
+      if(nx<0 || nx>=COLS || ny<0 || ny>=ROWS){ return gameOver(); }
+    }
+    const newHead = {x:nx, y:ny};
+
+    // 撞到自己
+    if(inSnake(newHead)) return gameOver();
+
+    // 是否吃到食物
+    let grew = false;
+    if(equal(newHead, food)){
+      grew = true;
+      setScore(score+1);
+      spawnFood();
+      maybeSpawnGold();
+      tickMs = Math.max(MIN_TICK, tickMs - SPEED_STEP);
+      beep(740, .05, 'square', .03);
+      if(navigator.vibrate) navigator.vibrate(10);
+    }else if(gold && equal(newHead, gold.pos)){
+      grew = true;
+      gold = null;
+      setScore(score+5);
+      tickMs = Math.max(MIN_TICK, tickMs - SPEED_STEP*2);
+      beep(1000, .07, 'triangle', .035);
+      if(navigator.vibrate) navigator.vibrate([10,30,20]);
+    }
+
+    snake.unshift(newHead);
+    if(!grew) snake.pop();
+
+    draw();
+  }
+
+  // ====== 绘制 ======
+  function draw(){
+    // 背景
+    ctx.fillStyle = '#0c0e14';
+    ctx.fillRect(0,0,cv.width/DPR,cv.height/DPR);
+
+    // 网格
+    ctx.strokeStyle = '#151924';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let x=1;x<COLS;x++){
+      ctx.moveTo(x*CELL+.5, 0); ctx.lineTo(x*CELL+.5, ROWS*CELL);
+    }
+    for(let y=1;y<ROWS;y++){
+      ctx.moveTo(0, y*CELL+.5); ctx.lineTo(COLS*CELL, y*CELL+.5);
+    }
+    ctx.stroke();
+
+    // 食物
+    drawCell(food.x, food.y, 6, getCandyGradient(ctx, CELL, 'food'));
+
+    // 金苹果
+    if(gold){
+      const age = (performance.now()-gold.born)/GOLD_LIFETIME; // [0,1]
+      const pulse = 0.6 + 0.4*Math.sin(performance.now()/120);
+      drawCell(gold.pos.x, gold.pos.y, 6, getCandyGradient(ctx, CELL, 'gold'));
+      // 光环
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.25, 1-age) * 0.6;
+      ctx.strokeStyle = 'rgba(250,204,21,0.7)';
+      ctx.lineWidth = 2;
+      const cx = gold.pos.x*CELL + CELL/2, cy = gold.pos.y*CELL + CELL/2;
+      ctx.beginPath(); ctx.arc(cx, cy, (CELL*0.6)*pulse, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+
+    // 蛇身
+    for(let i=snake.length-1;i>=1;i--){
+      const s = snake[i];
+      drawCell(s.x, s.y, 4, '#2dd4bf');
+    }
+    // 蛇头
+    const head = snake[0];
+    drawCell(head.x, head.y, 4, headGradient(ctx, CELL));
+
+    // 眼睛方向
+    ctx.fillStyle = '#0b0c10';
+    const ex = head.x*CELL + CELL/2 + (dir.x*CELL*0.2);
+    const ey = head.y*CELL + CELL/2 + (dir.y*CELL*0.2);
+    ctx.beginPath(); ctx.arc(ex-3, ey-3, 2.2, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(ex+3, ey+3, 2.2, 0, Math.PI*2); ctx.fill();
+  }
+
+  function drawCell(gx,gy,r,fill){
+    const x = gx*CELL, y = gy*CELL, w = CELL, h = CELL;
+    ctx.fillStyle = fill;
+    const cr = r;
+    ctx.beginPath();
+    ctx.moveTo(x+cr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, cr);
+    ctx.arcTo(x+w, y+h, x, y+h, cr);
+    ctx.arcTo(x, y+h, x, y, cr);
+    ctx.arcTo(x, y, x+w, y, cr);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function headGradient(ctx, size){
+    const g = ctx.createLinearGradient(0,0,size,size);
+    g.addColorStop(0,'#22c55e');
+    g.addColorStop(1,'#10b981');
+    return g;
+  }
+  function getCandyGradient(ctx, size, kind='food'){
+    const g = ctx.createLinearGradient(0,0,size,size);
+    if(kind==='gold'){ g.addColorStop(0,'#fde047'); g.addColorStop(1,'#f59e0b'); }
+    else { g.addColorStop(0,'#fb7185'); g.addColorStop(1,'#ef4444'); }
+    return g;
+  }
+
+  // ====== 结束 & 开始 ======
+  function gameOver(){
+    alive = false; paused = false;
+    overlay.textContent = `游戏结束 | 分数 ${score}`;
+    overlay.classList.add('show');
+    beep(180, .12, 'sawtooth', .05);
+    saveBest();
+  }
+
+  function start(){
+    reset();
+    overlay.textContent = '暂停';
+    draw();
+  }
+
+  // ====== 事件绑定 ======
+  btnStart.addEventListener('click', ()=>{ start(); });
+  btnPause.addEventListener('click', ()=>{ togglePause(); });
+
+  // 用户第一次交互后，AudioContext 才能发声（移动端策略）
+  window.addEventListener('pointerdown', ()=>{ if(audio.resume) audio.resume(); }, {once:true});
+
+  // 启动渲染循环
+  requestAnimationFrame(step);
+
+  // 初始一局
+  start();
+})();
+</script>
+</body>
+</html>
