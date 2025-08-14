@@ -14,7 +14,6 @@
     --wall:#8b5cf6; --wall-stroke:#000;
     --accent:#22d3ee; --accent2:#a78bfa; --text:#f4f4f5; --muted:#c1c2c3;
   }
-  /* 色盲友好（去红绿冲突，蓝/紫/黄系） */
   html[data-theme="cbf"]{
     --bg:#0b1020; --panel:#101522; --grid:#1b2232;
     --cell-a:#0c1322; --cell-b:#0e1528;
@@ -40,7 +39,7 @@
   #boardWrap{position:relative}
   canvas{width:100%; height:auto; display:block; background:var(--cell-a); border-radius:12px; box-shadow:0 16px 44px rgba(0,0,0,.45);
          touch-action:none; -webkit-user-select:none; user-select:none;}
-  .overlay{position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--text); background:rgba(0,0,0,.35); pointer-events:none; font-weight:800; letter-spacing:.08em; text-shadow:0 2px 10px rgba(0,0,0,.6)}
+  .overlay{position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--text); background:rgba(0,0,0,.35); pointer-events:auto; font-weight:800; letter-spacing:.08em; text-shadow:0 2px 10px rgba(0,0,0,.6)}
   .overlay.show{display:flex}
   .mobile-keys{display:none; grid-template-columns:repeat(3,1fr); gap:10px; user-select:none}
   .key{background:#0f1220; border:1px solid #2a2f3a; border-radius:12px; padding:14px 0; text-align:center; font-weight:700}
@@ -97,7 +96,6 @@
 
     <button class="primary" id="btnStart">开始 / 重开</button>
     <button id="btnPause" title="Space / P">暂停</button>
-    <button id="btnFull" title="全屏">全屏</button>
 
     <div class="stats">
       <div class="pill">分 <b id="score">0</b></div>
@@ -118,6 +116,7 @@
 
     <div class="hint">
       键盘：WASD / 方向键；暂停：Space 或 P。<br/>
+      死亡后：按 <b>R</b> 或 <b>Enter</b> 立即重开（或直接点击画面）。<br/>
       自适应画布、可达性刷苹果（不会刷在“盒子”外）、移动端滑动阈值降低与滚动屏蔽、方向缓冲更灵敏。
     </div>
   </div>
@@ -132,7 +131,7 @@
   const HS_KEY = "snakeFinalHS", PREF_KEY = "snakeFinalPrefs";
 
   // ===== 画布与自适应 =====
-  let CELL = 24; // 自适应调整
+  let CELL = 24;
   const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   const boardWrap = document.getElementById('boardWrap');
   const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
@@ -156,7 +155,7 @@
   const modeSel = document.getElementById('mode'), speedSel = document.getElementById('speed');
   const mapSel = document.getElementById('map'), themeSel = document.getElementById('theme');
   const sndChk = document.getElementById('snd'), vibChk = document.getElementById('vib');
-  const btnStart = document.getElementById('btnStart'), btnPause = document.getElementById('btnPause'), btnFull = document.getElementById('btnFull');
+  const btnStart = document.getElementById('btnStart'), btnPause = document.getElementById('btnPause');
   const overlay = document.getElementById('overlay'), keysEl = document.getElementById('keys');
 
   function applyTheme(v){ document.documentElement.setAttribute('data-theme', v||'high'); }
@@ -189,11 +188,9 @@
     const inSafe = (x,y)=> Math.abs(x-cx)<=safeRadius && Math.abs(y-cy)<=safeRadius;
 
     if(kind==='box'){
-      // 内盒，从四边 pad 处起。避开中心安全区，防开局困死
       for(let x=pad;x<COLS-pad;x++){ if(!inSafe(x,pad)) walls.push({x,y:pad}); if(!inSafe(x,ROWS-pad-1)) walls.push({x,y:ROWS-pad-1}); }
       for(let y=pad;y<ROWS-pad;y++){ if(!inSafe(pad,y)) walls.push({x:pad,y}); if(!inSafe(COLS-pad-1,y)) walls.push({x:COLS-pad-1,y}); }
     }else if(kind==='cross'){
-      // 中心留 3x3 通道
       const cxm=(COLS/2)|0, cym=(ROWS/2)|0;
       for(let x=2;x<COLS-2;x++){ if(Math.abs(x-cxm)>1) walls.push({x,y:cym}); }
       for(let y=2;y<ROWS-2;y++){ if(Math.abs(y-cym)>1) walls.push({x:cxm,y}); }
@@ -245,7 +242,7 @@
     return vis;
   }
 
-  // 只从“可达集合”中刷苹果，永远不会刷在“盒子外/不可达区”
+  // 只从“可达集合”中刷苹果
   function spawnFromReachable(excludePositions=[]){
     const vis=reachableCells();
     const excl=new Set(excludePositions.map(p=>p.x+','+p.y));
@@ -267,7 +264,7 @@
   function spawnFood(){
     const p = spawnFromReachable(gold ? [gold.pos] : []);
     food = p || null;
-    if(!food){ // 无可刷空位，视为通关
+    if(!food){ // 无可刷空位，通关
       alive=false; overlay.textContent='通关！分数 '+score; overlay.classList.add('show'); saveBest();
     }
   }
@@ -285,7 +282,7 @@
   function pickInitialDirFrom(start){
     const candidates=[{x:1,y:0},{x:0,y:1},{x:-1,y:0},{x:0,y:-1}];
     for(const d of candidates){
-      const n={x:start.x+d.x,y:start.y+d.y};
+      const n={x:start.x+d.x,y:start.y};
       const out = n.x<0||n.x>=COLS||n.y<0||n.y>=ROWS;
       if(!out && !cellBlocked(n)) return d;
     }
@@ -320,7 +317,11 @@
   }
 
   window.addEventListener('keydown', e=>{
-    if(e.code==='Space'||e.code==='KeyP'){ togglePause(); e.preventDefault(); return; }
+    // 快速重开：R 随时重开；Enter 在死亡/通关时重开
+    if(e.code==='KeyR'){ start(); e.preventDefault(); return; }
+    if(e.code==='Enter' && !alive){ start(); e.preventDefault(); return; }
+
+    if(e.code==='Space'||e.code==='KeyP'){ if(alive){ togglePause(); } e.preventDefault(); return; }
     const v = KEY_MAP[e.code]; if(!v) return;
     queueDir(v[0],v[1]); e.preventDefault();
   });
@@ -347,8 +348,11 @@
     queueDir(v[0],v[1]); if(vibChk.checked && navigator.vibrate) navigator.vibrate(8);
   });
 
-  // 可见性变化自动暂停
-  document.addEventListener('visibilitychange', ()=>{ if(document.hidden) { paused=true; overlay.textContent='暂停'; overlay.classList.add('show'); } });
+  // 叠层点击（死亡/通关时）直接重开
+  overlay.addEventListener('pointerdown', ()=>{ if(!alive) start(); });
+
+  // 页面隐藏自动暂停
+  document.addEventListener('visibilitychange', ()=>{ if(document.hidden && alive){ paused=true; overlay.textContent='暂停'; overlay.classList.add('show'); } });
 
   function togglePause(){ if(!alive) return; paused=!paused; overlay.textContent='暂停'; overlay.classList.toggle('show',paused); }
 
@@ -391,7 +395,6 @@
 
   // ===== 绘制 =====
   function getCss(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
-
   function drawBlock(gx,gy,r,fill,stroke){
     const x=gx*CELL,y=gy*CELL,w=CELL,h=CELL,cr=r; ctx.fillStyle=fill;
     ctx.beginPath();
@@ -399,7 +402,6 @@
     ctx.arcTo(x,y+h,x,y,cr); ctx.arcTo(x,y,x+w,y,cr); ctx.closePath(); ctx.fill();
     if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=1.5; ctx.stroke(); }
   }
-
   function drawCandy(gx,gy,kind='food',glow=false){
     const x=gx*CELL+CELL/2,y=gy*CELL+CELL/2; const g=ctx.createLinearGradient(x-CELL/2,y-CELL/2,x+CELL/2,y+CELL/2);
     if(kind==='gold'){ g.addColorStop(0,getCss('--gold-a')); g.addColorStop(1,getCss('--gold-b')); }
@@ -413,7 +415,6 @@
       ctx.fillStyle=rad; ctx.fill(); ctx.restore();
     }
   }
-
   function headGradient(){ const g=ctx.createLinearGradient(0,0,CELL,CELL); g.addColorStop(0,getCss('--snake-head')); g.addColorStop(1,getCss('--snake')); return g; }
 
   function draw(){
@@ -447,11 +448,6 @@
   // ===== 事件绑定 =====
   btnStart.addEventListener('click', start);
   btnPause.addEventListener('click', togglePause);
-  btnFull.addEventListener('click', ()=>{
-    const el = boardWrap;
-    if(document.fullscreenElement){ document.exitFullscreen?.(); }
-    else{ el.requestFullscreen?.(); }
-  });
   mapSel.addEventListener('change', ()=>{ start(); });
   modeSel.addEventListener('change', savePrefs);
   speedSel.addEventListener('change', savePrefs);
